@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials
 
 SHEET_NAME = "BizBuySell — Listings"  # same spreadsheet
-TAB_NAME = "Flippa"                   # the tab we just created
+TAB_NAME = "Flippa"                   # the tab we created
 
 
 def authorize_gsheet():
@@ -24,56 +24,65 @@ def authorize_gsheet():
 
 def fetch_flippa_listings(pages=1):
     """
-    Fetch Flippa listings by scraping search pages.
-    This is a simple HTML scraper – not perfect, but good enough for a deal-finding dashboard.
+    Fetch Flippa listings by scraping search pages via ScraperAPI.
     """
-    base_url = "https://flippa.com/search"
+    api_key = os.environ.get("SCRAPER_API_KEY")
+    if not api_key:
+        raise RuntimeError("SCRAPER_API_KEY environment variable is missing")
+
+    base_target = "https://flippa.com/search"
+    scraper_url = "https://api.scraperapi.com/"  # ScraperAPI endpoint
+
     all_rows = []
 
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
-
     for page in range(1, pages + 1):
+        target_url = f"{base_target}?page={page}"
         params = {
-            "page": page,
-            # You can add filters here later, e.g.:
-            # "filters[property_type]": "online-businesses"
+            "api_key": api_key,
+            "url": target_url,
+            # render=true uses a headless browser to execute JS – needed for Flippa search
+            "render": "true",
         }
-        print(f"Fetching Flippa page {page}...")
-        r = requests.get(base_url, params=params, headers=headers, timeout=20)
+        print(f"Fetching Flippa page {page} via ScraperAPI...")
+        r = requests.get(scraper_url, params=params, timeout=60)
+        print("Status code:", r.status_code)
         r.raise_for_status()
 
         soup = BeautifulSoup(r.text, "html.parser")
 
-        # Flippa uses cards for listings – classes can change over time,
-        # but this selector should get us started.
+        # Flippa uses listing links like /listing/xyz
         cards = soup.select("a[href^='/listing/']")
-        print(f"Found {len(cards)} card anchors on page {page}.")
+        print(f"Found {len(cards)} listing anchors on page {page}.")
 
         for a in cards:
             href = a.get("href")
-            url = "https://flippa.com" + href
+            if not href:
+                continue
 
-            # We try to extract title & snippet from surrounding elements
+            url = "https://flippa.com" + href
             title = a.get_text(strip=True)
 
-            # Sometimes the price is in a nearby span or div
+            # Try to grab nearby text for price / type
             parent = a.find_parent("div")
             price_text = ""
             asset_type = ""
             short_desc = ""
 
             if parent:
-                # naive attempts to find nearby text for price and description
-                price_el = parent.find(string=lambda s: "$" in s) if parent else None
+                # Very naive heuristics – can refine once we see real HTML
+                # Look for a sibling span/div with a dollar sign
+                price_el = None
+                for el in parent.find_all(string=True):
+                    if "$" in el:
+                        price_el = el
+                        break
                 price_text = price_el.strip() if price_el else ""
 
-                # look for asset type or category in nearby spans/divs
+                # Asset type often appears in a span
                 asset_type_el = parent.find("span")
                 asset_type = asset_type_el.get_text(strip=True) if asset_type_el else ""
 
-                # short description – next sibling text
+                # Short description – try the next sibling text
                 if parent.next_sibling:
                     short_desc = str(parent.next_sibling).strip()
 
@@ -98,7 +107,7 @@ def write_to_sheet(rows):
 
 
 def main():
-    listings = fetch_flippa_listings(pages=2)  # start with 2 pages; adjust as needed
+    listings = fetch_flippa_listings(pages=1)  # start with 1 page to keep usage low
     write_to_sheet(listings)
     print("Flippa listings updated.")
 
