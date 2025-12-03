@@ -6,11 +6,8 @@ from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials
 
 # === CONFIG ===
-# Your spreadsheet name (for reference only)
 SHEET_NAME = "BizBuySell — Listings"
-# Your actual spreadsheet ID from the URL
 SHEET_ID = "1_EvQAKLgYG4JyY19TbgsDAQGbeJeTwGlbB8znQnlwfU"
-# Tab name where Flippa data should go
 TAB_NAME = "Flippa"
 
 
@@ -21,7 +18,6 @@ def authorize_gsheet():
 
     service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
 
-    # Only Sheets scope needed since we use open_by_key()
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
 
     credentials = Credentials.from_service_account_info(
@@ -34,6 +30,7 @@ def authorize_gsheet():
 def fetch_flippa_listings(pages=1):
     """
     Fetch Flippa listings by scraping search pages via ScraperAPI.
+    If ScraperAPI returns non-200, we log and skip instead of crashing.
     """
     api_key = os.environ.get("SCRAPER_API_KEY")
     if not api_key:
@@ -49,16 +46,25 @@ def fetch_flippa_listings(pages=1):
         params = {
             "api_key": api_key,
             "url": target_url,
-            "render": "true",  # use headless browser
+            # IMPORTANT: drop render=true for now (can cause 500s on some plans)
+            # "render": "true",
         }
         print(f"Fetching Flippa page {page} via ScraperAPI...")
-        r = requests.get(scraper_url, params=params, timeout=60)
-        print("Status code:", r.status_code)
-        r.raise_for_status()
+        try:
+            r = requests.get(scraper_url, params=params, timeout=60)
+            print("Status code:", r.status_code)
+        except Exception as e:
+            print(f"Request error on page {page}: {e}")
+            continue
+
+        if r.status_code != 200:
+            print(f"Non-200 from ScraperAPI on page {page}: {r.status_code}")
+            # Skip this page instead of crashing
+            continue
 
         soup = BeautifulSoup(r.text, "html.parser")
 
-        # Very simple selector to start; we can refine once auth works
+        # Very simple selector to start; may find 0 and that's okay for now
         cards = soup.select("a[href^='/listing/']")
         print(f"Found {len(cards)} listing anchors on page {page}.")
 
@@ -96,7 +102,6 @@ def fetch_flippa_listings(pages=1):
 
 def write_to_sheet(rows):
     client = authorize_gsheet()
-    # IMPORTANT: open by key to avoid Drive scopes
     sheet = client.open_by_key(SHEET_ID).worksheet(TAB_NAME)
 
     sheet.clear()
@@ -109,7 +114,7 @@ def write_to_sheet(rows):
 
 
 def main():
-    listings = fetch_flippa_listings(pages=1)  # keep usage low for now
+    listings = fetch_flippa_listings(pages=1)  # keep usage low
     print(f"Total listings scraped: {len(listings)}")
     write_to_sheet(listings)
     print("Flippa listings updated.")
