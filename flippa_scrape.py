@@ -5,16 +5,25 @@ import gspread
 from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials
 
-SHEET_NAME = "BizBuySell — Listings"  # same spreadsheet
-TAB_NAME = "Flippa"                   # the tab we created
+# === CONFIG ===
+# Your spreadsheet name (for reference only)
+SHEET_NAME = "BizBuySell — Listings"
+# Your actual spreadsheet ID from the URL
+SHEET_ID = "1_EvQAKLgYG4JyY19TbgsDAQGbeJeTwGlbB8znQnlwfU"
+# Tab name where Flippa data should go
+TAB_NAME = "Flippa"
 
 
 def authorize_gsheet():
+    """Authorize Google Sheets using the service account JSON in the env."""
     if "GOOGLE_SERVICE_ACCOUNT_JSON" not in os.environ:
         raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON environment variable is missing")
 
     service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
+
+    # Only Sheets scope needed since we use open_by_key()
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+
     credentials = Credentials.from_service_account_info(
         service_account_info, scopes=scopes
     )
@@ -31,7 +40,7 @@ def fetch_flippa_listings(pages=1):
         raise RuntimeError("SCRAPER_API_KEY environment variable is missing")
 
     base_target = "https://flippa.com/search"
-    scraper_url = "https://api.scraperapi.com/"  # ScraperAPI endpoint
+    scraper_url = "https://api.scraperapi.com/"
 
     all_rows = []
 
@@ -40,8 +49,7 @@ def fetch_flippa_listings(pages=1):
         params = {
             "api_key": api_key,
             "url": target_url,
-            # render=true uses a headless browser to execute JS – needed for Flippa search
-            "render": "true",
+            "render": "true",  # use headless browser
         }
         print(f"Fetching Flippa page {page} via ScraperAPI...")
         r = requests.get(scraper_url, params=params, timeout=60)
@@ -50,7 +58,7 @@ def fetch_flippa_listings(pages=1):
 
         soup = BeautifulSoup(r.text, "html.parser")
 
-        # Flippa uses listing links like /listing/xyz
+        # Very simple selector to start; we can refine once auth works
         cards = soup.select("a[href^='/listing/']")
         print(f"Found {len(cards)} listing anchors on page {page}.")
 
@@ -62,15 +70,12 @@ def fetch_flippa_listings(pages=1):
             url = "https://flippa.com" + href
             title = a.get_text(strip=True)
 
-            # Try to grab nearby text for price / type
             parent = a.find_parent("div")
             price_text = ""
             asset_type = ""
             short_desc = ""
 
             if parent:
-                # Very naive heuristics – can refine once we see real HTML
-                # Look for a sibling span/div with a dollar sign
                 price_el = None
                 for el in parent.find_all(string=True):
                     if "$" in el:
@@ -78,11 +83,9 @@ def fetch_flippa_listings(pages=1):
                         break
                 price_text = price_el.strip() if price_el else ""
 
-                # Asset type often appears in a span
                 asset_type_el = parent.find("span")
                 asset_type = asset_type_el.get_text(strip=True) if asset_type_el else ""
 
-                # Short description – try the next sibling text
                 if parent.next_sibling:
                     short_desc = str(parent.next_sibling).strip()
 
@@ -93,12 +96,11 @@ def fetch_flippa_listings(pages=1):
 
 def write_to_sheet(rows):
     client = authorize_gsheet()
-    sheet = client.open(SHEET_NAME).worksheet(TAB_NAME)
+    # IMPORTANT: open by key to avoid Drive scopes
+    sheet = client.open_by_key(SHEET_ID).worksheet(TAB_NAME)
 
-    # Clear existing data
     sheet.clear()
 
-    # Prepend header row
     header = ["Title", "URL", "Price", "Asset Type", "Short Description"]
     rows_with_header = [header] + rows
 
@@ -107,7 +109,8 @@ def write_to_sheet(rows):
 
 
 def main():
-    listings = fetch_flippa_listings(pages=1)  # start with 1 page to keep usage low
+    listings = fetch_flippa_listings(pages=1)  # keep usage low for now
+    print(f"Total listings scraped: {len(listings)}")
     write_to_sheet(listings)
     print("Flippa listings updated.")
 
